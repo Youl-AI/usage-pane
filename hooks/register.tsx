@@ -128,22 +128,21 @@ export type Palette = {
   text: string; muted: string; faint: string; track: string; line: string; tick: string
   success: string; warning: string; error: string
 }
-/** 채도를 낮춘 눈이 편한 색(다크 배경 기준). 경고 단계는 색의 밝기보다 색상 차이로 구분한다 */
-export const PALETTES: Record<'sage' | 'slate' | 'quiet', Palette> = {
-  sage: {
-    text: '#E4E1D8', muted: '#A19E95', faint: '#7C7A72', track: '#34332F', line: '#3A3936', tick: '#CFCBC0',
-    success: '#8FB5A0', warning: '#CDAE74', error: '#C98A82',
-  },
-  slate: {
-    text: '#E4E1D8', muted: '#A19E95', faint: '#7C7A72', track: '#34332F', line: '#3A3936', tick: '#CFCBC0',
-    success: '#8FA8C8', warning: '#C9A87A', error: '#C48A8A',
-  },
-  quiet: {
-    text: '#E4E1D8', muted: '#A19E95', faint: '#7C7A72', track: '#34332F', line: '#3A3936', tick: '#CFCBC0',
-    success: '#A9A69D', warning: '#D1B07A', error: '#CF8E86',
-  },
+/**
+ * 채도를 낮춘 눈이 편한 색. 다크·라이트 두 벌을 SVG 안의 prefers-color-scheme로 고른다.
+ * 경고 단계는 밝기보다 색상 차이로 구분한다.
+ */
+export const DARK: Palette = {
+  text: '#E4E1D8', muted: '#A19E95', faint: '#7C7A72', track: '#34332F', line: '#3A3936', tick: '#CFCBC0',
+  success: '#8FB5A0', warning: '#CDAE74', error: '#C98A82',
 }
-const C: Palette = PALETTES.sage
+export const LIGHT: Palette = {
+  text: '#2F2E2A', muted: '#6B6860', faint: '#8E8B83', track: '#E6E3DB', line: '#E2DFD6', tick: '#4A4842',
+  success: '#4F7F66', warning: '#94702F', error: '#A3584E',
+}
+/** 입력창 위 한 줄·터미널용: 라이트·다크 어느 바탕에서도 읽히는 중간 밝기 */
+export const MID = { success: '#6F9A84', warning: '#AE8A48', error: '#B76B61' }
+const C = MID
 const NUM = "Bahnschrift, 'Segoe UI', sans-serif"
 const KR = "'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif"
 function esc(t: string): string {
@@ -156,52 +155,62 @@ function pct(v: number): string {
 const FS = { label: 14, value: 17, small: 12 }
 const ROW = 78
 
-export function paneSvg(s: UsageSnapshot | null, now: number, width = 280, P: Palette = C): string {
+type Role = keyof Palette
+function rules(p: Palette): string {
+  const fill = (['text', 'muted', 'faint', 'track', 'success', 'warning', 'error'] as Role[]).map(k => `.${k}{fill:${p[k]}}`)
+  return fill.join('') + `.line{stroke:${p.line}}.tick{stroke:${p.tick}}`
+}
+/** SVG 안의 스타일: 기본은 다크, 라이트 화면이면 라이트 색 */
+export function svgStyle(dark: Palette = DARK, light: Palette = LIGHT): string {
+  return `<style>${rules(dark)}@media (prefers-color-scheme: light){${rules(light)}}</style>`
+}
+
+export function paneSvg(s: UsageSnapshot | null, now: number, width = 280): string {
   const W = width
   const x0 = 4
   const tw = W - 8
   const out: string[] = []
-  const tone = (t: 'success' | 'warning' | 'error' | 'muted') => (t === 'muted' ? P.muted : P[t])
-  const text = (x: number, y: number, body: string, size: number, fill: string, opts = '') =>
-    out.push(`<text x="${x}" y="${y}" font-size="${size}" fill="${fill}" ${opts}>${esc(body)}</text>`)
-  const track = (y: number, used: number | undefined, fill: string) => {
-    out.push(`<rect x="${x0}" y="${y}" width="${tw}" height="8" rx="4" fill="${P.track}"/>`)
+  const text = (x: number, y: number, body: string, size: number, role: Role, opts = '') =>
+    out.push(`<text x="${x}" y="${y}" font-size="${size}" class="${role}" ${opts}>${esc(body)}</text>`)
+  const track = (y: number, used: number | undefined, role: Role) => {
+    out.push(`<rect x="${x0}" y="${y}" width="${tw}" height="8" rx="4" class="track"/>`)
     if (used !== undefined && used > 0) {
       const w = Math.max(8, (Math.min(100, used) / 100) * tw)
-      out.push(`<rect x="${x0}" y="${y}" width="${w.toFixed(1)}" height="8" rx="4" fill="${fill}"/>`)
+      out.push(`<rect x="${x0}" y="${y}" width="${w.toFixed(1)}" height="8" rx="4" class="${role}"/>`)
     }
   }
 
   let y = 0
   for (const r of rows(s, now)) {
-    const fill = r.used === undefined ? P.muted : P[color(r.used)]
-    text(x0, y + 23, r.label, FS.label, P.text, `font-family="${KR}"`)
-    text(W - 4, y + 23, r.used === undefined ? '-' : pct(r.used), FS.value, r.used !== undefined && r.used >= 70 ? fill : P.text, `font-family="${NUM}" text-anchor="end"`)
-    track(y + 32, r.used, fill)
+    const level: Role = r.used === undefined ? 'muted' : color(r.used)
+    text(x0, y + 23, r.label, FS.label, 'text', `font-family="${KR}"`)
+    text(W - 4, y + 23, r.used === undefined ? '-' : pct(r.used), FS.value, r.used !== undefined && r.used >= 70 ? level : 'text', `font-family="${NUM}" text-anchor="end"`)
+    track(y + 32, r.used, level)
     if (r.elapsed !== undefined) {
       const tx = (x0 + (r.elapsed / 100) * tw).toFixed(1)
-      out.push(`<line x1="${tx}" y1="${y + 28}" x2="${tx}" y2="${y + 44}" stroke="${P.tick}" stroke-width="2" stroke-linecap="round"/>`)
+      out.push(`<line x1="${tx}" y1="${y + 28}" x2="${tx}" y2="${y + 44}" class="tick" stroke-width="2" stroke-linecap="round"/>`)
     }
-    text(x0, y + 60, r.pace.text, FS.small, tone(r.pace.tone), `font-family="${KR}"`)
-    if (r.left) text(W - 4, y + 60, r.left, FS.small, P.muted, `font-family="${KR}" text-anchor="end"`)
-    out.push(`<line x1="${x0}" y1="${y + ROW}" x2="${W - 4}" y2="${y + ROW}" stroke="${P.line}" stroke-width="1"/>`)
+    text(x0, y + 60, r.pace.text, FS.small, r.pace.tone, `font-family="${KR}"`)
+    if (r.left) text(W - 4, y + 60, r.left, FS.small, 'muted', `font-family="${KR}" text-anchor="end"`)
+    out.push(`<line x1="${x0}" y1="${y + ROW}" x2="${W - 4}" y2="${y + ROW}" class="line" stroke-width="1"/>`)
     y += ROW
   }
 
   const cp = s?.contextPercent
-  text(x0, y + 23, '컨텍스트', FS.label, P.text, `font-family="${KR}"`)
-  text(W - 4, y + 23, cp === undefined ? '-' : `${cp}%`, FS.value, cp !== undefined && cp >= 70 ? P[color(cp)] : P.text, `font-family="${NUM}" text-anchor="end"`)
-  track(y + 32, cp, cp === undefined ? P.muted : P[color(cp)])
+  const cl: Role = cp === undefined ? 'muted' : color(cp)
+  text(x0, y + 23, '컨텍스트', FS.label, 'text', `font-family="${KR}"`)
+  text(W - 4, y + 23, cp === undefined ? '-' : `${cp}%`, FS.value, cp !== undefined && cp >= 70 ? cl : 'text', `font-family="${NUM}" text-anchor="end"`)
+  track(y + 32, cp, cl)
   const tokens =
     s?.contextTokens !== undefined
       ? `${Math.round(s.contextTokens / 1000).toLocaleString('en-US')}k / ${Math.round(s.contextWindow / 1000).toLocaleString('en-US')}k 토큰`
       : '첫 답 이후에 표시'
-  text(x0, y + 60, tokens, FS.small, P.muted, `font-family="${KR}"`)
+  text(x0, y + 60, tokens, FS.small, 'muted', `font-family="${KR}"`)
   const at = s ? new Date(s.readAt) : null
-  if (at) text(W - 4, y + 60, `갱신 ${at.getHours()}:${String(at.getMinutes()).padStart(2, '0')}`, FS.small, P.faint, `font-family="${KR}" text-anchor="end"`)
+  if (at) text(W - 4, y + 60, `갱신 ${at.getHours()}:${String(at.getMinutes()).padStart(2, '0')}`, FS.small, 'faint', `font-family="${KR}" text-anchor="end"`)
   y += 70
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${y}" viewBox="0 0 ${W} ${y}">${out.join('')}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${y}" viewBox="0 0 ${W} ${y}">${svgStyle()}${out.join('')}</svg>`
 }
 
 export function paneAlt(s: UsageSnapshot | null, now: number): string {
