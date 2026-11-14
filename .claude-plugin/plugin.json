@@ -1,0 +1,9 @@
+{
+  "name": "usage-pane",
+  "version": "0.4.0",
+  "description": "사용량 한도(5시간·7일·Fable)와 컨텍스트 사용률을 옆 패널과 입력창 위에 항상 띄운다",
+  "author": { "name": "Youl-AI" },
+  "license": "MIT",
+  "repository": "https://github.com/Youl-AI/usage-pane",
+  "types": "./types/index.d.ts"
+}

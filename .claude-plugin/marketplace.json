@@ -1,0 +1,6 @@
+{
+  "name": "usage-pane",
+  "owner": { "name": "Youl-AI" },
+  "description": "Claude Code 사용량 패널",
+  "plugins": [{ "name": "usage-pane", "source": "./" }]
+}
