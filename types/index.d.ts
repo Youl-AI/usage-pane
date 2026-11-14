@@ -15,8 +15,12 @@ export type UsageSnapshot = {
   sawLimits?: boolean
 }
 
+export type TodoItem = { id: string; text: string; by: 'me' | 'claude'; at: string; done: boolean }
+/** 이 세션 작업 폴더의 할 일 목록(저장은 $.store의 `todos:<cwd>`, 여기는 화면용 사본) */
+export type TodoState = { cwd: string; items: TodoItem[] }
+
 declare module 'claude-code' {
   interface PluginState {
-    'usage-pane': { snapshot: Shaped<UsageSnapshot | null> }
+    'usage-pane': { snapshot: Shaped<UsageSnapshot | null>; todos: Shaped<TodoState | null> }
   }
 }

@@ -1,13 +1,43 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-import type { UsageSnapshot, UsageWindow } from '../types'
+import type { TodoState, UsageSnapshot, UsageWindow } from '../types'
+import { addTodos, clearDone, folderLabel, group, promptSection, removeTodo, sanitize, shortDate, toggleTodo, TOOL_DESCRIPTION } from './todo'
+import type { Todo } from './todo'
 
 const PANE = 'usage'
 const TITLE = '사용량'
 const snapshot = atom({ plugin: 'usage-pane', key: 'snapshot' } as const, null, {
   shape: 'snapshot-1',
 })
+const todos = atom({ plugin: 'usage-pane', key: 'todos' } as const, null, { shape: 'todos-1' })
+const TOOL = 'mcp__usage-pane__todo_add'
+/** 할 일 출처 색: 라이트·다크 어느 바탕에서도 읽히는 중간 밝기 */
+const BY_COLOR = { claude: '#7893B5', me: '#6F9A84' }
+/** 새 세션 첫머리에 넘길 단락. 세션 시작 때 한 번 정하고 대화 중에는 바꾸지 않는다(프롬프트 캐시 규칙) */
+let promptText = ''
+
+function storeKey(cwd: string): string {
+  return `todos:${cwd}`
+}
+
+/** 저장소의 최신 목록에 바꿀 내용을 적용하고, 저장한 뒤 화면용 사본도 갱신한다(다른 세션이 같은 폴더를 고쳤어도 덮어쓰지 않게) */
+async function changeTodos($: EngineInterface, fn: (list: Todo[]) => Todo[]): Promise<Todo[] | null> {
+  const cur = await read($, todos)
+  if (!cur) return null
+  const latest = sanitize(await $.store.get(storeKey(cur.cwd)))
+  const items = fn(latest)
+  await $.store.set(storeKey(cur.cwd), items)
+  await update($, todos, () => ({ cwd: cur.cwd, items }))
+  return items
+}
+
+async function reloadTodos($: EngineInterface) {
+  const cur = await read($, todos)
+  if (!cur) return
+  const items = sanitize(await $.store.get(storeKey(cur.cwd)))
+  if (JSON.stringify(items) !== JSON.stringify(cur.items)) await update($, todos, () => ({ cwd: cur.cwd, items }))
+}
 
 type Measured = {
   rateLimits: SessionRateLimit[]
@@ -165,7 +195,7 @@ export function svgStyle(dark: Palette = DARK, light: Palette = LIGHT): string {
   return `<style>${rules(dark)}@media (prefers-color-scheme: light){${rules(light)}}</style>`
 }
 
-export function paneSvg(s: UsageSnapshot | null, now: number, width = 280): string {
+export function paneSvg(s: UsageSnapshot | null, now: number, width = 280, divider = false): string {
   const W = width
   const x0 = 4
   const tw = W - 8
@@ -209,6 +239,11 @@ export function paneSvg(s: UsageSnapshot | null, now: number, width = 280): stri
   const at = s ? new Date(s.readAt) : null
   if (at) text(W - 4, y + 60, `갱신 ${at.getHours()}:${String(at.getMinutes()).padStart(2, '0')}`, FS.small, 'faint', `font-family="${KR}" text-anchor="end"`)
   y += 70
+  if (divider) {
+    // 아래 할 일 영역과 나누는 선
+    out.push(`<line x1="${x0}" y1="${y + 2}" x2="${W - 4}" y2="${y + 2}" class="line" stroke-width="1"/>`)
+    y += 6
+  }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${y}" viewBox="0 0 ${W} ${y}">${svgStyle()}${out.join('')}</svg>`
 }
@@ -233,13 +268,51 @@ export const register: Register = on => {
     await $.command.register({ name: 'usage-pane', description: '사용량 패널을 다시 엽니다' })
     // 예전 버전이 하단 상태 줄에 남긴 표시를 지운다(입력창 위 한 줄과 겹쳐서 뺐다).
     $.ui.status(undefined)
-    // 사람이 보지 않는 실행(-p, SDK)에서는 패널과 타이머를 만들지 않는다.
-    if (!e.isInteractive) return next(e)
+    // isInteractive로 거르지 않는다: 데스크톱 앱은 엔진을 SDK로 실행해서 늘 false로 온다(2.1.321에서 확인).
+    // 그려 줄 화면이 없는 실행이면 ui.open이 isPlaced:false로 끝날 뿐이다.
     await refresh($)
+    // 할 일: 이 작업 폴더의 목록을 불러오고, Claude가 부를 도구를 등록한다.
+    const items = sanitize(await $.store.get(storeKey(e.cwd)))
+    await update($, todos, () => ({ cwd: e.cwd, items }))
+    promptText = promptSection(items, folderLabel(e.cwd))
+    await $.tool.register({
+      name: 'todo_add',
+      description: TOOL_DESCRIPTION,
+      isDeferred: false,
+      inputSchema: {
+        type: 'object',
+        properties: { items: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 30, description: '할 일 항목들. 항목 하나가 문자열 하나' } },
+        required: ['items'],
+      },
+    })
     void $.ui.open({ id: PANE, title: TITLE, columns: 34 })
-    // 남은 시간과 흐른 시간 눈금이 움직이도록 1분마다 다시 읽는다.
-    $.clock.every(60_000, () => void refresh($).catch(() => {}))
+    // 남은 시간과 흐른 시간 눈금이 움직이도록, 그리고 다른 세션이 고친 할 일을 받아 오도록 1분마다 다시 읽는다.
+    $.clock.every(60_000, () => void Promise.all([refresh($), reloadTodos($)]).catch(() => {}))
     return next(e)
+  })
+
+  on('tool.call', { tool: TOOL }, async ($, e) => {
+    const raw = (e as { items?: unknown }).items
+    const texts = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : typeof raw === 'string' ? [raw] : []
+    if (!texts.length) return { deny: 'items에 할 일 문자열을 하나 이상 넣어 주세요.' }
+    let added: string[] = []
+    let skipped: string[] = []
+    const saved = await changeTodos($, list => {
+      const r = addTodos(list, texts, 'claude', Date.now())
+      added = r.added
+      skipped = r.skipped
+      return r.list
+    })
+    if (!saved) return { deny: '할 일 목록을 쓸 수 없는 세션입니다(사람이 보는 세션에서만 동작).' }
+    const parts = [`할 일 목록(사용량 패널)에 ${added.length}개를 넣었습니다.`]
+    if (skipped.length) parts.push(`이미 있는 ${skipped.length}개는 건너뛰었습니다.`)
+    return { result: parts.join(' ') }
+  })
+
+  on('prompt.compose', async ($, e, next) => {
+    const r = await next(e)
+    if (!promptText) return r
+    return { sections: [...r.sections, { id: 'usage-pane:todos', text: promptText, scope: 'session' as const }] }
   })
 
   on('session.measure', async ($, e, next) => {
@@ -273,17 +346,72 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const s = await read($, snapshot)
+    const td = await read($, todos)
     const now = Date.now()
+    const { Box, Text, Button, Input } = $.ui.resolve(e)
+    const width = Math.max(8, Math.min(24, (e.props.bodyColumns ?? 34) - 14))
+
+    /* ---- 할 일 (시안 C: 누가 적었나로 묶기, 완료는 줄 긋기) ---- */
+    const items = td?.items ?? []
+    const row = (t: Todo) => (
+      <Box key={`r-${t.id}`} flexDirection="row" alignItems="center" gap="xs">
+        <Box flexGrow={1} flexShrink={1}>
+          <Button key={`t-${t.id}`} plain onPress={() => void changeTodos($, l => toggleTodo(l, t.id))}>
+            {t.done ? '☑ ' : '☐ '}
+            <Text strikethrough={t.done} dimColor={t.done}>{t.text}</Text>
+          </Button>
+        </Box>
+        <Text dimColor size="footnote" tabular>{shortDate(t.at)}</Text>
+        <Button key={`x-${t.id}`} plain label="×" onPress={() => void changeTodos($, l => removeTodo(l, t.id))} />
+      </Box>
+    )
+    const section = (title: string, by: Todo['by']) => {
+      const list = group(items, by)
+      if (!list.length) return null
+      return (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={BY_COLOR[by]} size="footnote">{title}</Text>
+          {list.map(row)}
+        </Box>
+      )
+    }
+    const todoPart = td ? (
+      <Box flexDirection="column" marginTop={1}>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text weight="semibold">할 일</Text>
+          <Text dimColor size="footnote">{folderLabel(td.cwd)}</Text>
+        </Box>
+        {items.length === 0 ? <Text dimColor size="footnote">아직 할 일이 없습니다. 아래에 적거나, 대화에 할 일 목록이 나오면 Claude가 넣습니다.</Text> : null}
+        {section('Claude가 적은 것', 'claude')}
+        {section('내가 적은 것', 'me')}
+        <Box marginTop={1}>
+          <Input
+            key={`add-${items.length}`}
+            placeholder="할 일 입력 후 Enter"
+            submitLabel="추가"
+            onSubmit={v => void changeTodos($, l => addTodos(l, [v], 'me', Date.now()).list)}
+          />
+        </Box>
+        {items.some(t => t.done) ? (
+          <Button key="clear-done" plain onPress={() => void changeTodos($, clearDone)}>
+            <Text dimColor size="footnote">완료 항목 지우기</Text>
+          </Button>
+        ) : null}
+      </Box>
+    ) : null
 
     // SVG를 그릴 수 있는 화면(데스크톱 등)
     if (e.surface !== 'terminal') {
       const { Svg } = $.ui.resolve(e)
-      return <Svg source={paneSvg(s, now)} alt={paneAlt(s, now)} />
+      return (
+        <Box flexDirection="column">
+          <Svg source={paneSvg(s, now, 280, !!td)} alt={paneAlt(s, now)} />
+          {todoPart}
+        </Box>
+      )
     }
 
     // 터미널: 같은 순서의 글자 모양
-    const { Box, Text } = $.ui.resolve(e)
-    const width = Math.max(8, Math.min(24, (e.props.bodyColumns ?? 34) - 14))
     return (
       <Box flexDirection="column">
         {rows(s, now).map(r => (
@@ -309,6 +437,8 @@ export const register: Register = on => {
             <Text color={C[color(s.contextPercent)]}>{bar(s.contextPercent, width)}</Text> {s.contextPercent}%
           </Text>
         )}
+        {todoPart ? <Text dimColor>{'─'.repeat(width + 6)}</Text> : null}
+        {todoPart}
       </Box>
     )
   })
