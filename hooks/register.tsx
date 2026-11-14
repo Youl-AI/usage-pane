@@ -92,9 +92,15 @@ export type Row = {
   pace: { text: string; tone: 'success' | 'warning' | 'error' | 'muted' }
 }
 
+/** 한도 값을 받은 적이 있는데 이 한도만 빠졌으면 초기화된 것: 0%로 본다 (Fable은 엔진이 원래 안 넘겨서 제외) */
+function resetToZero(s: UsageSnapshot | null, slot: (typeof SLOTS)[number]): boolean {
+  return !!s?.sawLimits && !('missing' in slot)
+}
+
 export function rows(s: UsageSnapshot | null, now: number): Row[] {
   return SLOTS.map(slot => {
     const w = s?.windows.find(x => x.kind === slot.kind)
+    if (!w && resetToZero(s, slot)) return { label: slot.label, used: 0, left: '', pace: { text: '초기화됨, 아직 사용 없음', tone: 'muted' as const } }
     if (!w) return { label: slot.label, left: '', pace: { text: 'missing' in slot ? slot.missing : '아직 값 없음', tone: 'muted' as const } }
     const elapsed = elapsedPercent(w.resetsAt, slot.hours, now)
     return { label: slot.label, used: w.percentUsed, left: leftText(w.resetsAt, now), elapsed, pace: paceText(w.percentUsed, elapsed) }
@@ -106,7 +112,8 @@ export function bandParts(s: UsageSnapshot | null): { label: string; value: stri
   if (!s || (s.windows.length === 0 && s.contextPercent === undefined)) return []
   const out: { label: string; value: string; color: 'success' | 'warning' | 'error' | undefined }[] = SLOTS.map(slot => {
     const w = s.windows.find(x => x.kind === slot.kind)
-    return w ? { label: slot.label, value: `${Math.round(w.percentUsed)}%`, color: color(w.percentUsed) } : { label: slot.label, value: '-', color: undefined }
+    if (w) return { label: slot.label, value: `${Math.round(w.percentUsed)}%`, color: color(w.percentUsed) }
+    return resetToZero(s, slot) ? { label: slot.label, value: '0%', color: 'success' as const } : { label: slot.label, value: '-', color: undefined }
   })
   out.push(
     s.contextPercent === undefined
@@ -206,7 +213,10 @@ export function paneAlt(s: UsageSnapshot | null, now: number): string {
 async function refresh($: EngineInterface, m?: Measured) {
   const measured = m ?? (await $.session.usage())
   const fresh = toSnapshot(measured)
-  await update($, snapshot, prev => (prev ? { ...fresh, windows: mergeWindows(prev.windows, fresh.windows, fresh.readAt) } : fresh))
+  await update($, snapshot, prev => {
+    const sawLimits = !!prev?.sawLimits || fresh.windows.length > 0
+    return prev ? { ...fresh, sawLimits, windows: mergeWindows(prev.windows, fresh.windows, fresh.readAt) } : { ...fresh, sawLimits }
+  })
 }
 
 export const register: Register = on => {

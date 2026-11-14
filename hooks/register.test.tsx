@@ -21,7 +21,7 @@ function engine(on: any, rateLimits: unknown[], context: unknown = { tokens: 840
   on('command.register', () => ({ value: { command: 'usage-pane' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.status', () => ({ value: undefined }))
-  on('clock.every', () => ({ value: () => {} }))
+  on('clock.every', () => ({ value: undefined }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('session.usage', () => ({ value: { startedAt: Date.now(), context, rateLimits } }))
 }
@@ -57,7 +57,8 @@ test('터미널 패널은 같은 순서의 글자로 그린다', async ($, on) =
   expect((await ui.find({ type: 'Text', text: /^Fable$/ }))?.text).toBe('Fable')
   expect((await ui.find({ type: 'Text', text: /86%/ }))?.text).toContain('86%')
   expect((await ui.find({ type: 'Text', text: /넘겨주지 않음/ }))?.text).toBe('앱이 아직 이 값을 넘겨주지 않음')
-  expect((await ui.find({ type: 'Text', text: /^아직 값 없음$/ }))?.text).toBe('아직 값 없음')
+  expect((await ui.find({ type: 'Text', text: /^초기화됨, 아직 사용 없음$/ }))?.text).toBe('초기화됨, 아직 사용 없음')
+  expect(await ui.find({ type: 'Text', text: /^아직 값 없음$/ })).toBe(undefined)
   await ui.unmount()
 })
 
@@ -82,6 +83,30 @@ test('입력창 위 한 줄: 5시간 · 7일 · Fable · 컨텍스트', async ($
     expect(line).toBe('5시간 86% · 7일 54% · Fable - · 컨텍스트 42%')
     await ui.unmount()
   }
+})
+
+test('한도 값을 받은 적이 있는데 5시간이 빠지면(초기화) 0%로 표시한다', async ($, on) => {
+  engine(on, [{ kind: 'seven_day', percentUsed: 54, resetsAt: inMin(4560) }])
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const src = String((await pane.find({ type: 'Svg' }))?.props.source)
+  expect(src).toContain('>0%<')
+  expect(src).toContain('초기화됨, 아직 사용 없음')
+  expect(src).toContain('앱이 아직 이 값을 넘겨주지 않음')
+  await pane.unmount()
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const line = (await band.findAll({ type: 'Text' })).map(t => t.text).filter(t => /(5시간|7일|Fable|컨텍스트)/.test(t)).join('')
+  expect(line).toBe('5시간 0% · 7일 54% · Fable - · 컨텍스트 42%')
+  await band.unmount()
+})
+
+test('한도 값을 한 번도 못 받았으면(API 키 등) 0%가 아니라 -', async ($, on) => {
+  engine(on, [])
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const line = (await band.findAll({ type: 'Text' })).map(t => t.text).filter(t => /(5시간|7일|Fable|컨텍스트)/.test(t)).join('')
+  expect(line).toBe('5시간 - · 7일 - · Fable - · 컨텍스트 42%')
+  await band.unmount()
 })
 
 test('값이 하나도 없으면 한 줄은 엔진에 맡긴다', async ($, on) => {

@@ -11,6 +11,8 @@ export type UsageSnapshot = {
   costUsd?: number
   /** 마지막으로 값을 읽은 시각(ms) — 남은 시간 표시를 다시 그리는 데 쓴다 */
   readAt: number
+  /** 이 세션에서 한도 값을 한 번이라도 받았는지. 받았는데 5시간·7일이 빠지면 초기화된 것으로 보고 0%로 표시한다 */
+  sawLimits?: boolean
 }
 
 declare module 'claude-code' {
