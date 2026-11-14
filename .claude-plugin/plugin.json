@@ -1,6 +1,6 @@
 {
   "name": "usage-pane",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "사용량 한도(5시간·7일·Fable)와 컨텍스트 사용률, 작업 폴더별 할 일 목록을 옆 패널에 띄운다",
   "author": { "name": "Youl-AI" },
   "license": "MIT",

@@ -75,10 +75,10 @@ export function shortDate(iso: string): string {
   return Number.isFinite(d.getTime()) ? `${d.getMonth() + 1}/${d.getDate()}` : ''
 }
 
-/** 패널 제목 옆에 보일 폴더 이름: 마지막 두 단계 */
+/** 패널 제목 옆에 보일 폴더 이름: 마지막 폴더 하나(사용자 이름 같은 앞부분은 보이지 않게) */
 export function folderLabel(cwd: string): string {
   const parts = cwd.split(/[\\/]+/).filter(Boolean)
-  return parts.slice(-2).join('\\')
+  return parts[parts.length - 1] ?? cwd
 }
 
 /** 저장된 값이 깨졌거나 옛 모양이면 쓸 수 있는 항목만 남긴다 */

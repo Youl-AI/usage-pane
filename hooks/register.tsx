@@ -353,16 +353,15 @@ export const register: Register = on => {
 
     /* ---- 할 일 (시안 C: 누가 적었나로 묶기, 완료는 줄 긋기) ---- */
     const items = td?.items ?? []
+    // 버튼은 체크 칸과 ×만. 할 일 글자는 버튼 밖의 일반 글자라야 줄바꿈·줄 긋기·흐림이 그려진다(데스크톱은 버튼 안 글자 꾸밈을 무시한다).
     const row = (t: Todo) => (
-      <Box key={`r-${t.id}`} flexDirection="row" alignItems="center" gap="xs">
-        <Box flexGrow={1} flexShrink={1}>
-          <Button key={`t-${t.id}`} plain onPress={() => void changeTodos($, l => toggleTodo(l, t.id))}>
-            {t.done ? '☑ ' : '☐ '}
-            <Text strikethrough={t.done} dimColor={t.done}>{t.text}</Text>
-          </Button>
+      <Box key={`r-${t.id}`} flexDirection="row" alignItems="flex-start" gap="xs">
+        <Button key={`t-${t.id}`} plain dimColor={t.done} label={t.done ? '☑' : '☐'} onPress={() => void changeTodos($, l => toggleTodo(l, t.id))} />
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text wrap="wrap" strikethrough={t.done} dimColor={t.done}>{t.text}</Text>
         </Box>
         <Text dimColor size="footnote" tabular>{shortDate(t.at)}</Text>
-        <Button key={`x-${t.id}`} plain label="×" onPress={() => void changeTodos($, l => removeTodo(l, t.id))} />
+        <Button key={`x-${t.id}`} plain dimColor label="×" onPress={() => void changeTodos($, l => removeTodo(l, t.id))} />
       </Box>
     )
     const section = (title: string, by: Todo['by']) => {
@@ -393,9 +392,9 @@ export const register: Register = on => {
           />
         </Box>
         {items.some(t => t.done) ? (
-          <Button key="clear-done" plain onPress={() => void changeTodos($, clearDone)}>
-            <Text dimColor size="footnote">완료 항목 지우기</Text>
-          </Button>
+          <Box flexDirection="row" justifyContent="flex-end">
+            <Button key="clear-done" plain dimColor label="완료 항목 지우기" onPress={() => void changeTodos($, clearDone)} />
+          </Box>
         ) : null}
       </Box>
     ) : null
