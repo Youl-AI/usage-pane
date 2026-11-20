@@ -91,20 +91,12 @@ export function sanitize(v: unknown): Todo[] {
     .slice(-MAX_TODOS)
 }
 
-export const TOOL_DESCRIPTION =
-  'Adds items to the to-do list shown in the user\'s usage pane for this project folder. ' +
-  'Call it ONLY when an explicit list of things still to do appears in the conversation: a list in your own reply such as ' +
-  '"남은 것", "다음에 할 일", "확인하지 못한 것", "follow-ups", "TODO", or a list of tasks the user wrote. ' +
-  'Pass each list item as one short string, in the user\'s language. ' +
-  'Do NOT call it for a single passing remark like "let\'s do that later", for steps you are about to do yourself in this turn, ' +
-  'or for items already finished. Duplicates of open items are skipped automatically.'
-
-/** 새 세션 첫머리에 넘길 한 단락 */
+/** 새 세션 첫머리에 넘길 한 단락: 읽기만 한다. Claude가 목록을 바꿀 길은 없다 */
 export function promptSection(list: Todo[], folder: string): string {
   const open = list.filter(t => !t.done)
   const lines = [
     `# 할 일 목록 (usage-pane, ${folder})`,
-    '사용자의 사용량 패널 아래에 이 작업 폴더의 할 일 목록이 있다. 대화에 남은 일·다음에 할 일 같은 목록이 실제로 나오면 mcp__usage-pane__todo_add 도구로 그 항목들을 넣는다. 한마디로 지나가는 말은 넣지 않는다.',
+    '사용자의 사용량 패널 아래에 이 작업 폴더의 할 일 목록이 있다. 사용자가 직접 적는 메모이고, Claude는 여기에 항목을 넣거나 고칠 수 없다. 참고로만 본다.',
   ]
   if (open.length) {
     lines.push(`이 세션을 시작할 때 남아 있던 할 일 ${open.length}개:`)

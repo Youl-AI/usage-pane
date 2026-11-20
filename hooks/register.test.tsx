@@ -24,7 +24,6 @@ function engine(on: any, rateLimits: unknown[], context: unknown = { tokens: 840
     store[e.key] = JSON.parse(JSON.stringify(e.value))
     return { value: undefined }
   })
-  on('tool.register', () => ({ value: { tool: 'mcp__usage-pane__todo_add' } }))
   on('command.register', () => ({ value: { command: 'usage-pane' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.status', () => ({ value: undefined }))
@@ -120,27 +119,44 @@ test('한도 값을 한 번도 못 받았으면(API 키 등) 0%가 아니라 -',
 const CWD = 'C:\\Users\\me\\Desktop\\excel'
 const texts = async (ui: any) => (await ui.findAll({ type: 'Text' })).map((t: any) => t.text)
 
-test('할 일: Claude 도구로 넣은 것과 입력칸으로 넣은 것이 묶음별로 나온다', async ($, on) => {
+test('할 일: 입력칸으로 적은 것만 들어가고, 묶음 제목 없이 한 목록으로 나온다', async ($, on) => {
   const store: Record<string, unknown> = {}
   engine(on, [{ kind: 'five_hour', percentUsed: 20 }], undefined, store)
   await $.session.start({ cwd: CWD, surface: 'desktop', isInteractive: true })
-  const r = await $.tool.call({ tool: 'mcp__usage-pane__todo_add', items: ['- README 맞춤법 검사', '2. 라이트 모드 앱에서 확인', ''] } as any)
-  expect(String((r as any).result)).toContain('2개를 넣었습니다')
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.input({ key: 'add-2', text: '다른 PC에서 설치 확인' })
+  await ui.input({ key: 'add-0', text: '- README 맞춤법 검사' })
+  await ui.input({ key: 'add-1', text: '다른 PC에서 설치 확인' })
   const all = await texts(ui)
-  const order = ['할 일', 'Claude가 적은 것', 'README 맞춤법 검사', '라이트 모드 앱에서 확인', '내가 적은 것', '다른 PC에서 설치 확인'].map(t => all.indexOf(t))
+  const order = ['할 일', 'README 맞춤법 검사', '다른 PC에서 설치 확인'].map(t => all.indexOf(t))
   expect(order.every(i => i >= 0)).toBe(true)
   expect([...order].sort((a, b) => a - b)).toEqual(order)
+  expect(all).not.toContain('Claude가 적은 것')
+  expect(all).not.toContain('내가 적은 것')
   expect(all).toContain('excel')
   expect(all.some((t: string) => t.includes('Users'))).toBe(false)
   expect(await ui.find({ type: 'Svg' })).toBeTruthy()
   const saved = store[`todos:${CWD}`] as any[]
   expect(saved.map(t => [t.text, t.by])).toEqual([
-    ['README 맞춤법 검사', 'claude'],
-    ['라이트 모드 앱에서 확인', 'claude'],
+    ['README 맞춤법 검사', 'me'],
     ['다른 PC에서 설치 확인', 'me'],
   ])
+  await ui.unmount()
+})
+
+test('할 일: 예전 버전에서 Claude가 넣은 항목은 지우지 않고 따로 보여 준다', async ($, on) => {
+  engine(on, [], undefined, {
+    [`todos:${CWD}`]: [
+      { id: 'c1', text: '배포', by: 'claude', at: '2026-11-14T01:00:00Z', done: false },
+      { id: 'm1', text: '인쇄 테스트', by: 'me', at: '2026-11-14T02:00:00Z', done: false },
+    ],
+  })
+  await $.session.start({ cwd: CWD, surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const all = await texts(ui)
+  const order = ['Claude가 적었던 것', '배포', '내가 적은 것', '인쇄 테스트'].map(t => all.indexOf(t))
+  expect(order.every(i => i >= 0)).toBe(true)
+  expect([...order].sort((a, b) => a - b)).toEqual(order)
+  expect(await ui.find({ type: 'Button', key: 'x-c1' })).toBeTruthy()
   await ui.unmount()
 })
 
@@ -160,24 +176,22 @@ test('할 일: 누르면 완료되어 줄이 그어지고, 완료 항목 지우�
   expect((store[`todos:${CWD}`] as any[])[0].done).toBe(true)
   await ui.press({ key: 'clear-done' })
   expect(store[`todos:${CWD}`]).toEqual([])
-  expect(await texts(ui)).toContain('아직 할 일이 없습니다. 아래에 적거나, 대화에 할 일 목록이 나오면 Claude가 넣습니다.')
+  expect(await texts(ui)).toContain('아직 할 일이 없습니다. 아래 입력칸에 적어 주세요.')
   await ui.unmount()
 })
 
-test('할 일: 같은 내용은 다시 넣지 않고, 빈 요청은 거절한다', async ($, on) => {
+test('할 일: 입력칸에 같은 내용을 다시 적으면 넣지 않는다', async ($, on) => {
   const store: Record<string, unknown> = {}
   engine(on, [], undefined, store)
   await $.session.start({ cwd: CWD, surface: 'desktop', isInteractive: true })
-  await $.tool.call({ tool: 'mcp__usage-pane__todo_add', items: ['테스트 붙이기'] } as any)
-  const again = await $.tool.call({ tool: 'mcp__usage-pane__todo_add', items: ['  테스트   붙이기 ', '배포'] } as any)
-  expect(String((again as any).result)).toContain('1개를 넣었습니다')
-  expect(String((again as any).result)).toContain('이미 있는 1개')
-  expect((store[`todos:${CWD}`] as any[]).map(t => t.text)).toEqual(['테스트 붙이기', '배포'])
-  const empty = await $.tool.call({ tool: 'mcp__usage-pane__todo_add', items: [] } as any)
-  expect(String((empty as any).deny)).toContain('items')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.input({ key: 'add-0', text: '테스트 붙이기' })
+  await ui.input({ key: 'add-1', text: '  테스트   붙이기 ' })
+  expect((store[`todos:${CWD}`] as any[]).map(t => t.text)).toEqual(['테스트 붙이기'])
+  await ui.unmount()
 })
 
-test('데스크톱 앱처럼 isInteractive=false로 와도 패널을 열고 할 일 도구를 등록한다', async ($, on) => {
+test('데스크톱 앱처럼 isInteractive=false로 와도 패널을 열고, Claude가 부를 도구는 등록하지 않는다', async ($, on) => {
   const opened: string[] = []
   const tools: string[] = []
   const store: Record<string, unknown> = {}
@@ -198,7 +212,7 @@ test('데스크톱 앱처럼 isInteractive=false로 와도 패널을 열고 할 
   })
   await $.session.start({ cwd: CWD, surface: 'desktop', isInteractive: false })
   expect(opened).toEqual(['usage'])
-  expect(tools).toEqual(['todo_add'])
+  expect(tools).toEqual([])
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await texts(ui)).includes('할 일')).toBe(true)
   await ui.unmount()
@@ -232,7 +246,8 @@ test('할 일 계산: 기호 걷기, 중복, 정렬, 저장값 정리, 첫머리
   expect(folderLabel('C:\\Users\\me\\Desktop\\excel')).toBe('excel')
   expect(folderLabel('/home/me/proj')).toBe('proj')
   const p = promptSection(r.list, 'Desktop\\excel')
-  expect(p).toContain('mcp__usage-pane__todo_add')
+  expect(p).not.toContain('todo_add')
+  expect(p).toContain('사용자가 직접 적는')
   expect(p).toContain('남아 있던 할 일 2개')
   expect(promptSection([], 'x')).toContain('지금 남은 할 일은 없다')
 })

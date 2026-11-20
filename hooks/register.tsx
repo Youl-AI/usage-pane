@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
 import type { TodoState, UsageSnapshot, UsageWindow } from '../types'
-import { addTodos, clearDone, folderLabel, group, promptSection, removeTodo, sanitize, shortDate, toggleTodo, TOOL_DESCRIPTION } from './todo'
+import { addTodos, clearDone, folderLabel, group, promptSection, removeTodo, sanitize, shortDate, toggleTodo } from './todo'
 import type { Todo } from './todo'
 
 const PANE = 'usage'
@@ -11,8 +11,7 @@ const snapshot = atom({ plugin: 'usage-pane', key: 'snapshot' } as const, null, 
   shape: 'snapshot-1',
 })
 const todos = atom({ plugin: 'usage-pane', key: 'todos' } as const, null, { shape: 'todos-1' })
-const TOOL = 'mcp__usage-pane__todo_add'
-/** 할 일 출처 색: 라이트·다크 어느 바탕에서도 읽히는 중간 밝기 */
+/** 할 일 출처 색: 라이트·다크 어느 바탕에서도 읽히는 중간 밝기. claude는 0.6 이하에서 Claude가 넣은 항목에만 쓴다 */
 const BY_COLOR = { claude: '#7893B5', me: '#6F9A84' }
 /** 새 세션 첫머리에 넘길 단락. 세션 시작 때 한 번 정하고 대화 중에는 바꾸지 않는다(프롬프트 캐시 규칙) */
 let promptText = ''
@@ -271,42 +270,14 @@ export const register: Register = on => {
     // isInteractive로 거르지 않는다: 데스크톱 앱은 엔진을 SDK로 실행해서 늘 false로 온다(2.1.321에서 확인).
     // 그려 줄 화면이 없는 실행이면 ui.open이 isPlaced:false로 끝날 뿐이다.
     await refresh($)
-    // 할 일: 이 작업 폴더의 목록을 불러오고, Claude가 부를 도구를 등록한다.
+    // 할 일: 이 작업 폴더의 목록을 불러온다. 항목은 사용자가 입력칸으로만 넣는다(0.7부터 Claude가 부를 도구는 없다).
     const items = sanitize(await $.store.get(storeKey(e.cwd)))
     await update($, todos, () => ({ cwd: e.cwd, items }))
     promptText = promptSection(items, folderLabel(e.cwd))
-    await $.tool.register({
-      name: 'todo_add',
-      description: TOOL_DESCRIPTION,
-      isDeferred: false,
-      inputSchema: {
-        type: 'object',
-        properties: { items: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 30, description: '할 일 항목들. 항목 하나가 문자열 하나' } },
-        required: ['items'],
-      },
-    })
     void $.ui.open({ id: PANE, title: TITLE, columns: 34 })
     // 남은 시간과 흐른 시간 눈금이 움직이도록, 그리고 다른 세션이 고친 할 일을 받아 오도록 1분마다 다시 읽는다.
     $.clock.every(60_000, () => void Promise.all([refresh($), reloadTodos($)]).catch(() => {}))
     return next(e)
-  })
-
-  on('tool.call', { tool: TOOL }, async ($, e) => {
-    const raw = (e as { items?: unknown }).items
-    const texts = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : typeof raw === 'string' ? [raw] : []
-    if (!texts.length) return { deny: 'items에 할 일 문자열을 하나 이상 넣어 주세요.' }
-    let added: string[] = []
-    let skipped: string[] = []
-    const saved = await changeTodos($, list => {
-      const r = addTodos(list, texts, 'claude', Date.now())
-      added = r.added
-      skipped = r.skipped
-      return r.list
-    })
-    if (!saved) return { deny: '할 일 목록을 쓸 수 없는 세션입니다(사람이 보는 세션에서만 동작).' }
-    const parts = [`할 일 목록(사용량 패널)에 ${added.length}개를 넣었습니다.`]
-    if (skipped.length) parts.push(`이미 있는 ${skipped.length}개는 건너뛰었습니다.`)
-    return { result: parts.join(' ') }
   })
 
   on('prompt.compose', async ($, e, next) => {
@@ -351,7 +322,7 @@ export const register: Register = on => {
     const { Box, Text, Button, Input } = $.ui.resolve(e)
     const width = Math.max(8, Math.min(24, (e.props.bodyColumns ?? 34) - 14))
 
-    /* ---- 할 일 (시안 C: 누가 적었나로 묶기, 완료는 줄 긋기) ---- */
+    /* ---- 할 일 (직접 적은 메모, 완료는 줄 긋기) ---- */
     const items = td?.items ?? []
     // 버튼은 체크 칸과 ×만. 할 일 글자는 버튼 밖의 일반 글자라야 줄바꿈·줄 긋기·흐림이 그려진다(데스크톱은 버튼 안 글자 꾸밈을 무시한다).
     const row = (t: Todo) => (
@@ -374,15 +345,23 @@ export const register: Register = on => {
         </Box>
       )
     }
+    // 예전 버전에서 Claude가 넣은 항목이 남아 있을 때만 묶음 제목을 단다. 없으면 제목 없는 한 목록.
+    const legacy = items.some(t => t.by === 'claude')
     const todoPart = td ? (
       <Box flexDirection="column" marginTop={1}>
         <Box flexDirection="row" justifyContent="space-between">
           <Text weight="semibold">할 일</Text>
           <Text dimColor size="footnote">{folderLabel(td.cwd)}</Text>
         </Box>
-        {items.length === 0 ? <Text dimColor size="footnote">아직 할 일이 없습니다. 아래에 적거나, 대화에 할 일 목록이 나오면 Claude가 넣습니다.</Text> : null}
-        {section('Claude가 적은 것', 'claude')}
-        {section('내가 적은 것', 'me')}
+        {items.length === 0 ? <Text dimColor size="footnote">아직 할 일이 없습니다. 아래 입력칸에 적어 주세요.</Text> : null}
+        {legacy ? section('Claude가 적었던 것', 'claude') : null}
+        {legacy ? (
+          section('내가 적은 것', 'me')
+        ) : group(items, 'me').length ? (
+          <Box flexDirection="column" marginTop={1}>
+            {group(items, 'me').map(row)}
+          </Box>
+        ) : null}
         <Box marginTop={1}>
           <Input
             key={`add-${items.length}`}
